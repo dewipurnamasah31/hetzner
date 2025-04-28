@@ -104,11 +104,11 @@ function hetznercloud_api_request($apiKey, $command, $method = 'GET', $postfield
 function hetznercloud_CreateAccount(array $params)
 {
     $apiKey = $params['configoption1'];
-    $serverName = trim($params['domain']); // Trim whitespace
-    $serverTypeWithLabel = trim($params['configoption2']); // Trim whitespace
-    $serverType = trim(explode('|', $serverTypeWithLabel)[0]); // Trim whitespace
-    $osTemplate = trim($params['customfields']['Operating System']); // Trim whitespace
-    $location = trim($params['customfields']['Location']); // Trim whitespace
+    $serverName = trim($params['domain']);
+    $serverTypeWithLabel = trim($params['configoption2']);
+    $serverType = trim(explode('|', $serverTypeWithLabel)[0]);
+    $osTemplate = trim($params['customfields']['Operating System']);
+    $location = trim($params['customfields']['Location']);
 
     // Validate server name
     if (empty($serverName)) { /* ... */ } elseif (!preg_match('/^[a-zA-Z0-9.-]+$/', $serverName)) { /* ... */ } elseif (strlen($serverName) > 64) { /* ... */ }
@@ -130,7 +130,46 @@ function hetznercloud_CreateAccount(array $params)
         logModuleCall('hetznercloud', 'CreateAccount - Response', $postfields, $response); // Log the API response
 
         if (isset($data['server']['id'])) {
-            // ... (rest of your successful creation logic)
+            $serverID = $data['server']['id'];
+            $ipv4 = $data['server']['public_net']['ipv4']['ip'];
+            $rescuePassword = isset($data['server']['root_password']) ? $data['server']['root_password'] : '';
+
+            // Update dedicated IP in tblhosting
+            Capsule::table('tblhosting')
+                ->where('id', $params['serviceid'])
+                ->update(['dedicatedip' => $ipv4]);
+
+            // Update custom field values in tblcustomfieldsvalues
+            $customFields = [
+                'Hetzner Server ID' => $serverID,
+                'Hetzner IPv4' => $ipv4,
+                'Operating System' => $osTemplate,
+                'Location' => $location,
+                'Rescue Password' => $rescuePassword,
+            ];
+
+            foreach ($customFields as $fieldName => $value) {
+                $fieldId = Capsule::table('tblcustomfields')
+                    ->where('relid', $params['packageid']) // Assuming custom fields are related to the product
+                    ->where('fieldname', $fieldName)
+                    ->value('id');
+
+                if ($fieldId) {
+                    Capsule::table('tblcustomfieldsvalues')
+                        ->insertOrIgnore([
+                            'fieldid' => $fieldId,
+                            'relid' => $params['serviceid'],
+                            'value' => $value,
+                        ]);
+                    Capsule::table('tblcustomfieldsvalues')
+                        ->where('fieldid', $fieldId)
+                        ->where('relid', $params['serviceid'])
+                        ->update(['value' => $value]);
+                }
+            }
+
+            return 'success'; // Explicitly return 'success' after successful creation and updates
+
         } else {
             $error = 'Failed to create server: ' . (isset($data['error']['message']) ? $data['error']['message'] : $response);
             logModuleCall('hetznercloud', 'CreateAccount', $params, 'Error: ' . $error);
