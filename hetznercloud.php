@@ -1,12 +1,12 @@
 <?php
 
-require_once ROOTDIR . '/includes/functions.php';
+//require_once ROOTDIR . '/includes/functions.php';
 
 if (!defined("WHMCS")) {
     die("This file cannot be accessed directly");
 }
 
-//require_once '/var/www/console/init.php';
+require_once '/var/www/console/init.php';
 
 // 1) Load WHMCS core (adjust path if your layout differs)
 
@@ -209,8 +209,8 @@ function hetznercloud_CreateAccount(array $params)
 {
     $apiKey = $params['configoption1'];
     $serverName = $params['domain'];
-    $serverTypeWithLabel = $params['configoption2']; // Contains "cx22|CX22"
-    $serverType = explode('|', $serverTypeWithLabel)[0]; // Extract just "cx22"
+    $serverTypeWithLabel = $params['configoption2'];
+    $serverType = explode('|', $serverTypeWithLabel)[0];
     $osTemplate = $params['customfields']['Operating System'];
     $location = $params['customfields']['Location'];
 
@@ -232,7 +232,7 @@ function hetznercloud_CreateAccount(array $params)
         $command = "/servers";
         $postfields = [
             'name' => $serverName,
-            'server_type' => $serverType, // Using the extracted server type code
+            'server_type' => $serverType,
             'image' => $osTemplate,
             'location' => $location,
         ];
@@ -245,14 +245,16 @@ function hetznercloud_CreateAccount(array $params)
             $ipv4 = $data['server']['public_net']['ipv4']['ip'];
             $rescuePassword = isset($data['server']['root_password']) ? $data['server']['root_password'] : '';
 
-            update_service([
-                'serviceid' => $params['serviceid'],
+            // Use the WHMCS Application instance to update service custom fields
+            $whmcs = \WHMCS\Application::getInstance();
+            $whmcs->service()->update($params['serviceid'], [
                 'customfields' => [
                     'Hetzner Server ID' => $serverID,
                     'Hetzner IPv4' => $ipv4,
                     'Rescue Password' => $rescuePassword,
                 ],
             ]);
+            $whmcs->service()->save(); // Save the changes
 
             logModuleCall('hetznercloud', 'CreateAccount', $params, 'Success - Server ID: ' . $serverID . ' - Response: ' . $response);
             return 'success';
