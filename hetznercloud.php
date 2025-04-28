@@ -76,7 +76,7 @@ function hetznercloud_api_request($apiKey, $command, $method = 'GET', $postfield
     curl_setopt($ch, CURLOPT_HTTPHEADER, [
         'Authorization: Bearer ' . $apiKey,
         'Content-Type: application/json',
-        'Accept: application/json',
+        'Accept: application/json;version=1', // Explicitly set API version
     ]);
     curl_setopt($ch, CURLOPT_RETURNTRANSFER, 1);
     curl_setopt($ch, CURLOPT_CUSTOMREQUEST, $method);
@@ -85,7 +85,7 @@ function hetznercloud_api_request($apiKey, $command, $method = 'GET', $postfield
     curl_setopt($ch, CURLOPT_SSL_VERIFYHOST, 2);
 
     if ($method === 'POST' || $method === 'PUT') {
-        $encodedPostfields = '{}'; // Explicitly set an empty JSON object
+        $encodedPostfields = json_encode($postfields);
         curl_setopt($ch, CURLOPT_POSTFIELDS, $encodedPostfields);
         logModuleCall('hetznercloud', 'API Request Body (' . $method . ' ' . $command . ')', [], $encodedPostfields); // Log the request body
     }
@@ -104,11 +104,11 @@ function hetznercloud_api_request($apiKey, $command, $method = 'GET', $postfield
 function hetznercloud_CreateAccount(array $params)
 {
     $apiKey = $params['configoption1'];
-    $serverName = $params['domain']; // Use the domain directly
-    $serverTypeWithLabel = $params['configoption2'];
-    $serverType = explode('|', $serverTypeWithLabel)[0];
-    $osTemplate = $params['customfields']['Operating System']; // Ensure this is the correct key
-    $location = $params['customfields']['Location']; // Ensure this is the correct key
+    $serverName = trim($params['domain']); // Trim whitespace
+    $serverTypeWithLabel = trim($params['configoption2']); // Trim whitespace
+    $serverType = trim(explode('|', $serverTypeWithLabel)[0]); // Trim whitespace
+    $osTemplate = trim($params['customfields']['Operating System']); // Trim whitespace
+    $location = trim($params['customfields']['Location']); // Trim whitespace
 
     // Validate server name
     if (empty($serverName)) { /* ... */ } elseif (!preg_match('/^[a-zA-Z0-9.-]+$/', $serverName)) { /* ... */ } elseif (strlen($serverName) > 64) { /* ... */ }
@@ -141,8 +141,6 @@ function hetznercloud_CreateAccount(array $params)
         return 'Error: ' . $e->getMessage();
     }
 }
-
-
 
 /**
  * Hetzner Cloud Terminate Account
