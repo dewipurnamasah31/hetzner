@@ -59,19 +59,19 @@ function hetznercloud_ConfigOptions()
             "Type" => "dropdown",
             "FriendlyName" => "Operating System",
             "Description" => "Select the default operating system for new servers",
-            "Options" => hetznercloud_get_os_templates(), // Function to fetch OS templates
+            "Options" => hetznercloud_get_os_templates_for_config(), // Modified function call
         ],
         "server_types" => [
             "Type" => "dropdown",
             "FriendlyName" => "Server Type",
             "Description" => "Select the default server type for new servers",
-            "Options" => hetznercloud_get_server_types(), // Function to fetch server types
+            "Options" => hetznercloud_get_server_types_for_config(), // Modified function call
         ],
         "locations" => [
             "Type" => "dropdown",
             "FriendlyName" => "Location",
             "Description" => "Select the default location for new servers",
-            "Options" => hetznercloud_get_locations(), // Function to fetch locations
+            "Options" => hetznercloud_get_locations_for_config(), // Modified function call
         ],
         // You can add more configuration options as needed
     ];
@@ -128,7 +128,7 @@ function hetznercloud_api_request($apiKey, $command, $method = 'GET', $postfield
  *
  * @return array An array of OS templates for the dropdown.
  */
-function hetznercloud_get_os_templates()
+function hetznercloud_get_os_templates_for_config()
 {
     $apiKey = get_module_setting('api_key', 'hetznercloud');
     $templates = [];
@@ -141,7 +141,7 @@ function hetznercloud_get_os_templates()
             }
         }
     } catch (\Exception $e) {
-        logModuleCall('hetznercloud', 'get_os_templates', [], 'Error: ' . $e->getMessage());
+        logModuleCall('hetznercloud', 'get_os_templates_config', [], 'Error: ' . $e->getMessage());
     }
     return $templates;
 }
@@ -153,7 +153,7 @@ function hetznercloud_get_os_templates()
  *
  * @return array An array of server types for the dropdown.
  */
-function hetznercloud_get_server_types()
+function hetznercloud_get_server_types_for_config()
 {
     $apiKey = get_module_setting('api_key', 'hetznercloud');
     $group = get_module_setting('server_type_group', 'hetznercloud');
@@ -171,7 +171,7 @@ function hetznercloud_get_server_types()
             }
         }
     } catch (\Exception $e) {
-        logModuleCall('hetznercloud', 'get_server_types', ['group' => $group], 'Error: ' . $e->getMessage());
+        logModuleCall('hetznercloud', 'get_server_types_config', ['group' => $group], 'Error: ' . $e->getMessage());
     }
     return $serverTypes;
 }
@@ -183,7 +183,7 @@ function hetznercloud_get_server_types()
  *
  * @return array An array of locations for the dropdown.
  */
-function hetznercloud_get_locations()
+function hetznercloud_get_locations_for_config()
 {
     $apiKey = get_module_setting('api_key', 'hetznercloud');
     $group = get_module_setting('location_group', 'hetznercloud');
@@ -201,7 +201,7 @@ function hetznercloud_get_locations()
             }
         }
     } catch (\Exception $e) {
-        logModuleCall('hetznercloud', 'get_locations', ['group' => $group], 'Error: ' . $e->getMessage());
+        logModuleCall('hetznercloud', 'get_locations_config', ['group' => $group], 'Error: ' . $e->getMessage());
     }
     return $locations;
 }
