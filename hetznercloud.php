@@ -920,8 +920,6 @@ function hetznercloud_PowerOff(array $params)
     }
 }
 
-
-
 /**
  * Hetzner Cloud Reboot
  *
