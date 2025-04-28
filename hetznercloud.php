@@ -6,7 +6,7 @@ if (!defined("WHMCS")) {
     die("This file cannot be accessed directly");
 }
 
-require_once '/var/www/console/init.php';
+//require_once '/var/www/console/init.php';
 
 // 1) Load WHMCS core (adjust path if your layout differs)
 
@@ -36,13 +36,6 @@ function hetznercloud_MetaData()
     ];
 }
 
-/**
- * Hetzner Cloud Module Configuration Options
- *
- * Defines the configuration options available to the admin when setting up the module.
- *
- * @return array
- */
 function hetznercloud_ConfigOptions()
 {
     return [
@@ -59,6 +52,7 @@ function hetznercloud_ConfigOptions()
         ],
     ];
 }
+
 /**
  * Hetzner Cloud API Request Helper Function
  *
@@ -102,6 +96,92 @@ function hetznercloud_api_request($apiKey, $command, $method = 'GET', $postfield
     return $response;
 }
 
+function hetznercloud_CreateAccount(array $params)
+{
+    $apiKey = $params['configoption1'];
+    $serverName = $params['domain'];
+    $serverTypeWithLabel = $params['configoption2'];
+    $serverType = explode('|', $serverTypeWithLabel)[0];
+    $osTemplate = $params['customfields']['Operating System'];
+    $location = $params['customfields']['Location'];
+
+    // Validate server name
+    if (empty($serverName)) {
+        $serverName = 'server-' . time(); // Generate a unique default name
+        logModuleCall('hetznercloud', 'CreateAccount', $params, 'Warning: Server name was empty. Using default name: ' . $serverName);
+    } elseif (!preg_match('/^[a-zA-Z0-9.-]+$/', $serverName)) { // Check for allowed characters
+        $error = 'Invalid server name.  Only alphanumeric characters, hyphens, and periods are allowed.';
+        logModuleCall('hetznercloud', 'CreateAccount', $params, 'Error: ' . $error);
+        return $error;
+    } elseif (strlen($serverName) > 64) { //check the length
+        $error = 'Invalid server name.  The maximum length is 64 characters.';
+        logModuleCall('hetznercloud', 'CreateAccount', $params, 'Error: ' . $error);
+        return $error;
+    }
+
+    try {
+        $command = "/servers";
+        $postfields = [
+            'name' => $serverName,
+            'server_type' => $serverType,
+            'image' => $osTemplate,
+            'location' => $location,
+        ];
+
+        $response = hetznercloud_api_request($apiKey, $command, 'POST', $postfields);
+        $data = json_decode($response, true);
+
+        if (isset($data['server']['id'])) {
+            $serverID = $data['server']['id'];
+            $ipv4 = $data['server']['public_net']['ipv4']['ip'];
+            $rescuePassword = isset($data['server']['root_password']) ? $data['server']['root_password'] : '';
+
+            // Update dedicated IP in tblhosting
+            Capsule::table('tblhosting')
+                ->where('id', $params['serviceid'])
+                ->update(['dedicatedip' => $ipv4]);
+
+            // Update custom field values in tblcustomfieldsvalues
+            $customFields = [
+                'Hetzner Server ID' => $serverID,
+                'Hetzner IPv4' => $ipv4,
+                'Operating System' => $osTemplate,
+                'Location' => $location,
+                'Rescue Password' => $rescuePassword,
+            ];
+
+            foreach ($customFields as $fieldName => $value) {
+                $fieldId = Capsule::table('tblcustomfields')
+                    ->where('relid', $params['packageid']) // Assuming custom fields are related to the product
+                    ->where('fieldname', $fieldName)
+                    ->value('id');
+
+                if ($fieldId) {
+                    Capsule::table('tblcustomfieldsvalues')
+                        ->insertOrIgnore([
+                            'fieldid' => $fieldId,
+                            'relid' => $params['serviceid'],
+                            'value' => $value,
+                        ]);
+                    Capsule::table('tblcustomfieldsvalues')
+                        ->where('fieldid', $fieldId)
+                        ->where('relid', $params['serviceid'])
+                        ->update(['value' => $value]);
+                }
+            }
+
+            logModuleCall('hetznercloud', 'CreateAccount', $params, 'Success - Server ID: ' . $serverID . ' - Response: ' . $response);
+            return 'success';
+        } else {
+            $error = 'Failed to create server: ' . (isset($data['error']['message']) ? $data['error']['message'] : $response);
+            logModuleCall('hetznercloud', 'CreateAccount', $params, 'Error: ' . $error);
+            return $error;
+        }
+    } catch (\Exception $e) {
+        logModuleCall('hetznercloud', 'CreateAccount', $params, 'Exception: ' . $e->getMessage());
+        return 'Error: ' . $e->getMessage();
+    }
+}
 
 /**
  * Hetzner Cloud Get OS Templates
@@ -195,78 +275,6 @@ function hetznercloud_get_locations_for_config()
         logModuleCall('hetznercloud', 'get_locations_for_config - Error', [], 'Error: ' . $e->getMessage());
     }
     return implode(',', $locations);
-}
-
-/**
- * Hetzner Cloud Create Account
- *
- * Creates a new server on the Hetzner Cloud.
- *
- * @param array $params An array of module parameters.
- * @return string 'success' on success, or an error message on failure.
- */
-function hetznercloud_CreateAccount(array $params)
-{
-    $apiKey = $params['configoption1'];
-    $serverName = $params['domain'];
-    $serverTypeWithLabel = $params['configoption2'];
-    $serverType = explode('|', $serverTypeWithLabel)[0];
-    $osTemplate = $params['customfields']['Operating System'];
-    $location = $params['customfields']['Location'];
-
-    // Validate server name
-    if (empty($serverName)) {
-        $serverName = 'server-' . time(); // Generate a unique default name
-        logModuleCall('hetznercloud', 'CreateAccount', $params, 'Warning: Server name was empty. Using default name: ' . $serverName);
-    } elseif (!preg_match('/^[a-zA-Z0-9.-]+$/', $serverName)) { // Check for allowed characters
-        $error = 'Invalid server name.  Only alphanumeric characters, hyphens, and periods are allowed.';
-        logModuleCall('hetznercloud', 'CreateAccount', $params, 'Error: ' . $error);
-        return $error;
-    } elseif (strlen($serverName) > 64) { //check the length
-        $error = 'Invalid server name.  The maximum length is 64 characters.';
-        logModuleCall('hetznercloud', 'CreateAccount', $params, 'Error: ' . $error);
-        return $error;
-    }
-
-    try {
-        $command = "/servers";
-        $postfields = [
-            'name' => $serverName,
-            'server_type' => $serverType,
-            'image' => $osTemplate,
-            'location' => $location,
-        ];
-
-        $response = hetznercloud_api_request($apiKey, $command, 'POST', $postfields);
-        $data = json_decode($response, true);
-
-        if (isset($data['server']['id'])) {
-            $serverID = $data['server']['id'];
-            $ipv4 = $data['server']['public_net']['ipv4']['ip'];
-            $rescuePassword = isset($data['server']['root_password']) ? $data['server']['root_password'] : '';
-
-            // Use the WHMCS Application instance to update service custom fields
-            $whmcs = \WHMCS\Application::getInstance();
-            $whmcs->service()->update($params['serviceid'], [
-                'customfields' => [
-                    'Hetzner Server ID' => $serverID,
-                    'Hetzner IPv4' => $ipv4,
-                    'Rescue Password' => $rescuePassword,
-                ],
-            ]);
-            $whmcs->service()->save(); // Save the changes
-
-            logModuleCall('hetznercloud', 'CreateAccount', $params, 'Success - Server ID: ' . $serverID . ' - Response: ' . $response);
-            return 'success';
-        } else {
-            $error = 'Failed to create server: ' . (isset($data['error']['message']) ? $data['error']['message'] : $response);
-            logModuleCall('hetznercloud', 'CreateAccount', $params, 'Error: ' . $error);
-            return $error;
-        }
-    } catch (\Exception $e) {
-        logModuleCall('hetznercloud', 'CreateAccount', $params, 'Exception: ' . $e->getMessage());
-        return 'Error: ' . $e->getMessage();
-    }
 }
 
 /**
