@@ -327,8 +327,8 @@ function hetznercloud_TerminateAccount(array $params)
 
         logModuleCall('hetznercloud', 'TerminateAccount', $params, 'HTTP Code: ' . $httpCode . ' - Response: ' . $response);
 
-        if ($httpCode === 204) { // Successful deletion returns 204 No Content
-            return 'success';
+        if ($httpCode >= 200 && $httpCode < 300) {
+            return 'success'; // Consider successful initiation as success
         } else {
             $error = 'Failed to terminate server: ' . (isset($data['error']['message']) ? $data['error']['message'] : $response);
             return $error;
