@@ -69,6 +69,7 @@ function hetznercloud_api_request($apiKey, $command, $method = 'GET', $postfield
 {
     $url = 'https://api.hetzner.cloud/v1' . $command;
     $ch = curl_init();
+    $GLOBALS['ch'] = $ch; // Store the curl handle
     curl_setopt($ch, CURLOPT_URL, $url);
     curl_setopt($ch, CURLOPT_HTTPHEADER, [
         'Authorization: Bearer ' . $apiKey,
@@ -323,21 +324,44 @@ function hetznercloud_SuspendAccount(array $params)
 {
     $apiKey = $params['configoption1'];
     $serviceID = $params['serviceid'];
-    $serverID = get_query_val('tblhosting', 'customfields', ['id' => $serviceID]);
-    $serverID = trim(explode('|', $serverID)[0]);
+
+    // Get the ID of the 'Hetzner Server ID' custom field
+    $fieldId = Capsule::table('tblcustomfields')
+        ->where('relid', $params['packageid']) // Assuming custom fields are related to the product
+        ->where('fieldname', 'Hetzner Server ID')
+        ->value('id');
+
+    if (!$fieldId) {
+        $error = 'Custom field "Hetzner Server ID" not found for product ID: ' . $params['packageid'] . '. Cannot suspend.';
+        logModuleCall('hetznercloud', 'SuspendAccount', $params, 'Error: ' . $error);
+        return $error;
+    }
+
+    // Retrieve the Hetzner Server ID from tblcustomfieldsvalues
+    $serverID = Capsule::table('tblcustomfieldsvalues')
+        ->where('fieldid', $fieldId)
+        ->where('relid', $serviceID)
+        ->value('value');
+
+    if (empty($serverID)) {
+        $error = 'Hetzner Server ID not found for service ID: ' . $serviceID . ' in custom fields. Cannot suspend.';
+        logModuleCall('hetznercloud', 'SuspendAccount', $params, 'Error: ' . $error);
+        return $error;
+    }
 
     try {
         $command = "/servers/" . $serverID . "/actions/shutdown";
         $postfields = ['type' => 'shutdown'];
         $response = hetznercloud_api_request($apiKey, $command, 'POST', $postfields);
+        $httpCode = curl_getinfo($GLOBALS['ch'], CURLINFO_HTTP_CODE); // Get HTTP status code
         $data = json_decode($response, true);
 
-        if (isset($data['action']['status']) && $data['action']['status'] === 'success') {
-            logModuleCall('hetznercloud', 'SuspendAccount', $params, 'Success - Server ID: ' . $serverID . ' - Response: ' . $response);
-            return 'success';
+        logModuleCall('hetznercloud', 'SuspendAccount', $params, 'HTTP Code: ' . $httpCode . ' - Response: ' . $response);
+
+        if ($httpCode >= 200 && $httpCode < 300) {
+            return 'success'; // Consider any successful HTTP status as success for initiation
         } else {
-            $error = 'Failed to suspend server: ' . (isset($data['error']['message']) ? $data['error']['message'] : $response);
-            logModuleCall('hetznercloud', 'SuspendAccount', $params, 'Error: ' . $error);
+            $error = 'Failed to initiate suspend (shutdown) on server: ' . (isset($data['error']['message']) ? $data['error']['message'] : $response);
             return $error;
         }
     } catch (\Exception $e) {
@@ -345,7 +369,7 @@ function hetznercloud_SuspendAccount(array $params)
         return 'Error: ' . $e->getMessage();
     }
 }
-
+$GLOBALS['ch'] = null;
 /**
  * Hetzner Cloud Unsuspend Account
  *
