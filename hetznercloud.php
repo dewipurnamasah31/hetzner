@@ -85,7 +85,7 @@ function hetznercloud_api_request($apiKey, $command, $method = 'GET', $postfield
     curl_setopt($ch, CURLOPT_SSL_VERIFYHOST, 2);
 
     if ($method === 'POST' || $method === 'PUT') {
-        $encodedPostfields = json_encode($postfields);
+        $encodedPostfields = '{}'; // Explicitly set an empty JSON object
         curl_setopt($ch, CURLOPT_POSTFIELDS, $encodedPostfields);
         logModuleCall('hetznercloud', 'API Request Body (' . $method . ' ' . $command . ')', [], $encodedPostfields); // Log the request body
     }
@@ -413,8 +413,8 @@ function hetznercloud_UnsuspendAccount(array $params)
 
     try {
         $command = "/servers/" . $serverID . "/actions/poweron";
-        $postfields = []; // Explicitly set an empty array for the POST body
-        $response = hetznercloud_api_request($apiKey, $command, 'POST', $postfields); // Pass the empty array
+        $postfields = []; // Keep this for consistency in the function signature
+        $response = hetznercloud_api_request($apiKey, $command, 'POST', $postfields);
         $httpCode = curl_getinfo($GLOBALS['ch'], CURLINFO_HTTP_CODE); // Get HTTP status code
         $data = json_decode($response, true);
 
