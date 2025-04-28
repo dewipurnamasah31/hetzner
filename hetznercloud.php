@@ -192,9 +192,6 @@ function hetznercloud_get_locations_for_config()
     return implode(',', $locations);
 }
 
-// That's the first part. Are you ready for the next chunk?
-// Part 2 of Hetzner Cloud WHMCS Module
-
 /**
  * Hetzner Cloud Create Account
  *
@@ -207,15 +204,30 @@ function hetznercloud_CreateAccount(array $params)
 {
     $apiKey = $params['configoption1'];
     $serverName = $params['domain'];
-    $serverType = $params['configoption2']; // Server Type
-    $osTemplate = $params['customfields']['Operating System'];  // From custom field
-    $location = $params['customfields']['Location'];        // From custom field
+    $serverTypeWithLabel = $params['configoption2']; // Contains "cx22|CX22"
+    $serverType = explode('|', $serverTypeWithLabel)[0]; // Extract just "cx22"
+    $osTemplate = $params['customfields']['Operating System'];
+    $location = $params['customfields']['Location'];
+
+    // Validate server name
+    if (empty($serverName)) {
+        $serverName = 'server-' . time(); // Generate a unique default name
+        logModuleCall('hetznercloud', 'CreateAccount', $params, 'Warning: Server name was empty. Using default name: ' . $serverName);
+    } elseif (!preg_match('/^[a-zA-Z0-9.-]+$/', $serverName)) { // Check for allowed characters
+        $error = 'Invalid server name.  Only alphanumeric characters, hyphens, and periods are allowed.';
+        logModuleCall('hetznercloud', 'CreateAccount', $params, 'Error: ' . $error);
+        return $error;
+    } elseif (strlen($serverName) > 64) { //check the length
+        $error = 'Invalid server name.  The maximum length is 64 characters.';
+        logModuleCall('hetznercloud', 'CreateAccount', $params, 'Error: ' . $error);
+        return $error;
+    }
 
     try {
         $command = "/servers";
         $postfields = [
             'name' => $serverName,
-            'server_type' => $serverType,
+            'server_type' => $serverType, // Using the extracted server type code
             'image' => $osTemplate,
             'location' => $location,
         ];
@@ -226,9 +238,8 @@ function hetznercloud_CreateAccount(array $params)
         if (isset($data['server']['id'])) {
             $serverID = $data['server']['id'];
             $ipv4 = $data['server']['public_net']['ipv4']['ip'];
-            $rescuePassword = isset($data['server']['root_password']) ? $data['server']['root_password'] : ''; //check if root_password exists
+            $rescuePassword = isset($data['server']['root_password']) ? $data['server']['root_password'] : '';
 
-            // Update custom fields
             update_service([
                 'serviceid' => $params['serviceid'],
                 'customfields' => [
