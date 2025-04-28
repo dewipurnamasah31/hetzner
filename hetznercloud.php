@@ -367,26 +367,129 @@ function hetznercloud_ChangePackage(array $params)
 {
     $apiKey = $params['configoption1'];
     $serviceID = $params['serviceid'];
-    $serverID = get_query_val('tblhosting', 'customfields', ['id' => $serviceID]);
-    $serverID = trim(explode('|', $serverID)[0]);
-    $newServerType = $params['configoption2']; // The new server type selected during upgrade/downgrade
+    $newServerTypeWithLabel = $params['configoptions']['Server Type']; // Get the new server type from configoptions
+    $newServerType = explode('|', $newServerTypeWithLabel)[0];
+
+    // Get the ID of the 'Hetzner Server ID' custom field
+    $fieldId = Capsule::table('tblcustomfields')
+        ->where('relid', $params['packageid']) // Assuming custom fields are related to the product
+        ->where('fieldname', 'Hetzner Server ID')
+        ->value('id');
+
+    if (!$fieldId) {
+        $error = 'Custom field "Hetzner Server ID" not found for product ID: ' . $params['packageid'] . '. Cannot change package.';
+        logModuleCall('hetznercloud', 'ChangePackage', $params, 'Error: ' . $error);
+        return $error;
+    }
+
+    // Retrieve the Hetzner Server ID from tblcustomfieldsvalues
+    $serverID = Capsule::table('tblcustomfieldsvalues')
+        ->where('fieldid', $fieldId)
+        ->where('relid', $serviceID)
+        ->value('value');
+
+    if (empty($serverID)) {
+        $error = 'Hetzner Server ID not found for service ID: ' . $serviceID . '. Cannot change package.';
+        logModuleCall('hetznercloud', 'ChangePackage', $params, 'Error: ' . $error);
+        return $error;
+    }
 
     try {
-        $command = "/servers/" . $serverID;
-        $postfields = [
-            'server_type' => $newServerType,
-        ];
-        $response = hetznercloud_api_request($apiKey, $command, 'PUT', $postfields);
-        $data = json_decode($response, true);
+        // Hetzner Cloud API does not have a direct "change server type" action.
+        // The process is:
+        // 1. Power off the server.
+        // 2. Delete the server.
+        // 3. Create a new server with the same name and the new server type.
+        // 4.  Restore from backup if available.
 
-        if (isset($data['server']['id']) && $data['server']['id'] == $serverID) {
-            logModuleCall('hetznercloud', 'ChangePackage', $params, 'Success - Server ID: ' . $serverID . ' - Changed to: ' . $newServerType . ' - Response: ' . $response);
-            return 'success';
-        } else {
-            $error = 'Failed to change server type: ' . (isset($data['error']['message']) ? $data['error']['message'] : $response);
-            logModuleCall('hetznercloud', 'ChangePackage', $params, 'Error: ' . $error);
+        // --- 1. Power off the server ---
+        $powerOffCommand = "/servers/" . $serverID . "/actions/shutdown";
+        $powerOffResponse = hetznercloud_api_request($apiKey, $powerOffCommand, 'POST', []);
+        $powerOffHttpCode = curl_getinfo($GLOBALS['ch'], CURLINFO_HTTP_CODE);
+        $powerOffData = json_decode($powerOffResponse, true);
+
+        logModuleCall('hetznercloud', 'ChangePackage - Power Off', $params, 'HTTP Code: ' . $powerOffHttpCode . ' - Response: ' . $powerOffResponse);
+
+        if ($powerOffHttpCode < 200 || $powerOffHttpCode >= 300) {
+            $error = 'Failed to power off server before changing package: ' . (isset($powerOffData['error']['message']) ? $powerOffData['error']['message'] : $powerOffResponse);
+            return $error; // Stop if powering off fails
+        }
+
+        // --- 2. Delete the server ---
+        $deleteCommand = "/servers/" . $serverID;
+        $deleteResponse = hetznercloud_api_request($apiKey, $deleteCommand, 'DELETE');
+        $deleteHttpCode = curl_getinfo($GLOBALS['ch'], CURLINFO_HTTP_CODE);
+        $deleteData = json_decode($deleteResponse, true);
+        logModuleCall('hetznercloud', 'ChangePackage - Delete', $params, 'HTTP Code: ' . $deleteHttpCode . ' - Response: ' . $deleteResponse);
+
+        if ($deleteHttpCode !== 204) {
+             $error = 'Failed to delete server before changing package: ' . (isset($deleteData['error']['message']) ? $deleteData['error']['message'] : $deleteResponse);
             return $error;
         }
+
+        // --- 3. Create a new server with the new server type and same name ---
+        $serverName = $params['domain']; // Use the same name
+        $osTemplate = $params['customfields']['Operating System']; //and OS
+        $location = $params['customfields']['Location'];  //and location.
+        $createCommand = "/servers";
+        $createPostfields = [
+            'name' => $serverName,
+            'server_type' => $newServerType,
+            'image' => $osTemplate,  // Use the same OS Template.
+            'location' => $location, // Use the same Location
+        ];
+        $createResponse = hetznercloud_api_request($apiKey, $createCommand, 'POST', $createPostfields);
+        $createHttpCode = curl_getinfo($GLOBALS['ch'], CURLINFO_HTTP_CODE);
+        $createData = json_decode($createResponse, true);
+        logModuleCall('hetznercloud', 'ChangePackage - Create', $params, 'HTTP Code: ' . $createHttpCode . ' - Response: ' . $createResponse);
+
+        if ($createHttpCode < 200 || $createHttpCode >= 300) {
+            $error = 'Failed to create new server with the new package: ' . (isset($createData['error']['message']) ? $createData['error']['message'] : $createResponse);
+            return $error;
+        }
+
+        $newServerID = $createData['server']['id'];
+        $newIPv4 = $createData['server']['public_net']['ipv4']['ip'];
+        $newRescuePassword = isset($createData['server']['root_password']) ? $createData['server']['root_password'] : '';
+
+       // --- 4.  Restore from backup (If Applicable) ---
+        //  WHMCS does not directly manage Hetzner Backups.  You would need custom fields
+        //  to store backup information and implement the restore logic here, if desired.
+        //  This is outside the scope of this basic module.
+
+        // Update dedicated IP and Hetzner Server ID in tblhosting and tblcustomfieldsvalues
+         Capsule::table('tblhosting')
+            ->where('id', $serviceID)
+            ->update(['dedicatedip' => $newIPv4]);
+
+        $customFields = [
+            'Hetzner Server ID' => $newServerID,
+            'Hetzner IPv4' => $newIPv4,
+            'Operating System' => $osTemplate,
+            'Location' => $location,
+            'Rescue Password' => $newRescuePassword,
+        ];
+
+        foreach ($customFields as $fieldName => $value) {
+            $fieldId = Capsule::table('tblcustomfields')
+                ->where('relid', $params['packageid'])
+                ->where('fieldname', $fieldName)
+                ->value('id');
+
+            if ($fieldId) {
+                Capsule::table('tblcustomfieldsvalues')
+                    ->insertOrIgnore([
+                        'fieldid' => $fieldId,
+                        'relid' => $serviceID,
+                        'value' => $value,
+                    ]);
+                Capsule::table('tblcustomfieldsvalues')
+                    ->where('fieldid', $fieldId)
+                    ->where('relid', $serviceID)
+                    ->update(['value' => $value]);
+            }
+        }
+       return 'success';
     } catch (\Exception $e) {
         logModuleCall('hetznercloud', 'ChangePackage', $params, 'Exception: ' . $e->getMessage());
         return 'Error: ' . $e->getMessage();
@@ -709,6 +812,176 @@ function hetznercloud_rebootServerClient(array $params)
     }
 }
 
+
+
+function hetznercloud_PowerOn(array $params)
+{
+    $apiKey = $params['configoption1'];
+    $serviceID = $params['serviceid'];
+
+    // Get the ID of the 'Hetzner Server ID' custom field
+    $fieldId = Capsule::table('tblcustomfields')
+        ->where('relid', $params['packageid'])
+        ->where('fieldname', 'Hetzner Server ID')
+        ->value('id');
+
+    if (!$fieldId) {
+        $error = 'Custom field "Hetzner Server ID" not found for product ID: ' . $params['packageid'] . '. Cannot power on.';
+        logModuleCall('hetznercloud', 'PowerOn', $params, 'Error: ' . $error);
+        return $error;
+    }
+
+    // Retrieve the Hetzner Server ID from tblcustomfieldsvalues
+    $serverID = Capsule::table('tblcustomfieldsvalues')
+        ->where('fieldid', $fieldId)
+        ->where('relid', $serviceID)
+        ->value('value');
+
+    if (empty($serverID)) {
+        $error = 'Hetzner Server ID not found for service ID: ' . $serviceID . '. Cannot power on.';
+        logModuleCall('hetznercloud', 'PowerOn', $params, 'Error: ' . $error);
+        return $error;
+    }
+
+    try {
+        $command = "/servers/" . $serverID . "/actions/poweron";
+        $response = hetznercloud_api_request($apiKey, $command, 'POST', []);
+        $httpCode = curl_getinfo($GLOBALS['ch'], CURLINFO_HTTP_CODE);
+        $data = json_decode($response, true);
+
+        logModuleCall('hetznercloud', 'PowerOn', $params, 'HTTP Code: ' . $httpCode . ' - Response: ' . $response);
+
+        if ($httpCode >= 200 && $httpCode < 300) {
+            return 'success';
+        } else {
+            $error = 'Failed to power on server: ' . (isset($data['error']['message']) ? $data['error']['message'] : $response);
+            return $error;
+        }
+    } catch (\Exception $e) {
+        logModuleCall('hetznercloud', 'PowerOn', $params, 'Exception: ' . $e->getMessage());
+        return 'Error: ' . $e->getMessage();
+    }
+}
+
+/**
+ * Hetzner Cloud Power Off
+ *
+ * Powers off a server on the Hetzner Cloud.  This is a hard shutdown.
+ *
+ * @param array $params An array of module parameters.
+ * @return string 'success' on success, or an error message on failure.
+ */
+function hetznercloud_PowerOff(array $params)
+{
+    $apiKey = $params['configoption1'];
+    $serviceID = $params['serviceid'];
+
+    // Get the ID of the 'Hetzner Server ID' custom field
+    $fieldId = Capsule::table('tblcustomfields')
+        ->where('relid', $params['packageid'])
+        ->where('fieldname', 'Hetzner Server ID')
+        ->value('id');
+
+    if (!$fieldId) {
+        $error = 'Custom field "Hetzner Server ID" not found for product ID: ' . $params['packageid'] . '. Cannot power off.';
+        logModuleCall('hetznercloud', 'PowerOff', $params, 'Error: ' . $error);
+        return $error;
+    }
+
+    // Retrieve the Hetzner Server ID from tblcustomfieldsvalues
+    $serverID = Capsule::table('tblcustomfieldsvalues')
+        ->where('fieldid', $fieldId)
+        ->where('relid', $serviceID)
+        ->value('value');
+
+    if (empty($serverID)) {
+        $error = 'Hetzner Server ID not found for service ID: ' . $serviceID . '. Cannot power off.';
+        logModuleCall('hetznercloud', 'PowerOff', $params, 'Error: ' . $error);
+        return $error;
+    }
+
+    try {
+        $command = "/servers/" . $serverID . "/actions/poweroff";  // Hard shutdown.
+        $response = hetznercloud_api_request($apiKey, $command, 'POST', []);
+        $httpCode = curl_getinfo($GLOBALS['ch'], CURLINFO_HTTP_CODE);
+        $data = json_decode($response, true);
+
+        logModuleCall('hetznercloud', 'PowerOff', $params, 'HTTP Code: ' . $httpCode . ' - Response: ' . $response);
+
+        if ($httpCode >= 200 && $httpCode < 300) {
+            return 'success';
+        } else {
+            $error = 'Failed to power off server: ' . (isset($data['error']['message']) ? $data['error']['message'] : $response);
+            return $error;
+        }
+    } catch (\Exception $e) {
+        logModuleCall('hetznercloud', 'PowerOff', $params, 'Exception: ' . $e->getMessage());
+        return 'Error: ' . $e->getMessage();
+    }
+}
+
+
+
+/**
+ * Hetzner Cloud Reboot
+ *
+ * Reboots a server on the Hetzner Cloud.
+ *
+ * @param array $params An array of module parameters.
+ * @return string 'success' on success, or an error message on failure.
+ */
+function hetznercloud_Reboot(array $params)
+{
+    $apiKey = $params['configoption1'];
+    $serviceID = $params['serviceid'];
+
+    // Get the ID of the 'Hetzner Server ID' custom field
+    $fieldId = Capsule::table('tblcustomfields')
+        ->where('relid', $params['packageid'])
+        ->where('fieldname', 'Hetzner Server ID')
+        ->value('id');
+
+    if (!$fieldId) {
+        $error = 'Custom field "Hetzner Server ID" not found for product ID: ' . $params['packageid'] . '. Cannot reboot.';
+        logModuleCall('hetznercloud', 'Reboot', $params, 'Error: ' . $error);
+        return $error;
+    }
+
+    // Retrieve the Hetzner Server ID from tblcustomfieldsvalues
+    $serverID = Capsule::table('tblcustomfieldsvalues')
+        ->where('fieldid', $fieldId)
+        ->where('relid', $serviceID)
+        ->value('value');
+
+    if (empty($serverID)) {
+        $error = 'Hetzner Server ID not found for service ID: ' . $serviceID . '. Cannot reboot.';
+        logModuleCall('hetznercloud', 'Reboot', $params, 'Error: ' . $error);
+        return $error;
+    }
+
+    try {
+        $command = "/servers/" . $serverID . "/actions/reboot";
+        $postfields = ['type' => 'soft'];  // Soft reboot.  You could add a config option for type.
+        $response = hetznercloud_api_request($apiKey, $command, 'POST', $postfields);
+        $httpCode = curl_getinfo($GLOBALS['ch'], CURLINFO_HTTP_CODE);
+        $data = json_decode($response, true);
+
+        logModuleCall('hetznercloud', 'Reboot', $params, 'HTTP Code: ' . $httpCode . ' - Response: ' . $response);
+
+        if ($httpCode >= 200 && $httpCode < 300) {
+            return 'success';
+        } else {
+            $error = 'Failed to reboot server: ' . (isset($data['error']['message']) ? $data['error']['message'] : $response);
+            return $error;
+        }
+    } catch (\Exception $e) {
+        logModuleCall('hetznercloud', 'Reboot', $params, 'Exception: ' . $e->getMessage());
+        return 'Error: ' . $e->getMessage();
+    }
+}
+
+
+
 /**
  * Hetzner Cloud Output Client Area
  *
@@ -906,4 +1179,66 @@ function hetznercloud_get_locations_for_config()
         logModuleCall('hetznercloud', 'get_locations_for_config - Error', [], 'Error: ' . $e->getMessage());
     }
     return implode(',', $locations);
+}
+function hetznercloud_GetServerDetails(array $params)
+{
+    $apiKey = $params['configoption1'];
+    $serviceID = $params['serviceid'];
+
+    // Get the ID of the 'Hetzner Server ID' custom field
+    $fieldId = Capsule::table('tblcustomfields')
+        ->where('relid', $params['packageid'])
+        ->where('fieldname', 'Hetzner Server ID')
+        ->value('id');
+
+    if (!$fieldId) {
+        $error = 'Custom field "Hetzner Server ID" not found for product ID: ' . $params['packageid'] . '.';
+        logModuleCall('hetznercloud', 'GetServerDetails', $params, 'Error: ' . $error);
+        return ['error' => $error]; // Use the 'error' key for consistent error reporting
+    }
+
+    // Retrieve the Hetzner Server ID from tblcustomfieldsvalues
+    $serverID = Capsule::table('tblcustomfieldsvalues')
+        ->where('fieldid', $fieldId)
+        ->where('relid', $serviceID)
+        ->value('value');
+
+    if (empty($serverID)) {
+        $error = 'Hetzner Server ID not found for service ID: ' . $serviceID . '.';
+        logModuleCall('hetznercloud', 'GetServerDetails', $params, 'Error: ' . $error);
+        return ['error' => $error];  // Use the 'error' key
+    }
+
+    try {
+        $command = "/servers/" . $serverID;
+        $response = hetznercloud_api_request($apiKey, $command, 'GET');
+        $httpCode = curl_getinfo($GLOBALS['ch'], CURLINFO_HTTP_CODE);
+        $data = json_decode($response, true);
+
+        logModuleCall('hetznercloud', 'GetServerDetails', $params, 'HTTP Code: ' . $httpCode . ' - Response: ' . $response);
+
+        if ($httpCode === 200 && isset($data['server'])) {
+            $server = $data['server'];
+            $serverDetails = [
+                'serverid' => $server['id'],
+                'name' => $server['name'],
+                'server_type' => $server['server_type']['name'],
+                'status' => $server['status'],
+                'ip_addresses' => [
+                    'v4' => $server['public_net']['ipv4']['ip'],
+                    'v6' => $server['public_net']['ipv6']['ip'],
+                ],
+                'location' => $server['location']['name'],
+                'created' => $server['created'],
+                // Add more details as needed from the Hetzner API response
+            ];
+            return $serverDetails;
+        } else {
+            $error = 'Failed to retrieve server details: ' . (isset($data['error']['message']) ? $data['error']['message'] : $response);
+            return ['error' => $error]; // Use the 'error' key
+        }
+    } catch (\Exception $e) {
+        logModuleCall('hetznercloud', 'GetServerDetails', $params, 'Exception: ' . $e->getMessage());
+        return ['error' => $e->getMessage()]; // Use the 'error' key
+    }
 }
