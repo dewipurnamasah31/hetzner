@@ -85,7 +85,7 @@ function hetznercloud_api_request($apiKey, $command, $method = 'GET', $postfield
     curl_setopt($ch, CURLOPT_SSL_VERIFYHOST, 2);
 
     if ($method === 'POST' || $method === 'PUT') {
-        $encodedPostfields = json_encode($postfields);
+        $encodedPostfields = json_encode((object) $postfields); // Encode the postfields array (or empty object)
         curl_setopt($ch, CURLOPT_POSTFIELDS, $encodedPostfields);
         logModuleCall('hetznercloud', 'API Request Body (' . $method . ' ' . $command . ')', [], $encodedPostfields); // Log the request body
     }
