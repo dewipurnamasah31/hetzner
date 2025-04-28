@@ -294,20 +294,43 @@ function hetznercloud_TerminateAccount(array $params)
 {
     $apiKey = $params['configoption1'];
     $serviceID = $params['serviceid'];
-    $serverID = get_query_val('tblhosting', 'customfields', ['id' => $serviceID]);
-    $serverID = trim(explode('|', $serverID)[0]);
+
+    // Get the ID of the 'Hetzner Server ID' custom field
+    $fieldId = Capsule::table('tblcustomfields')
+        ->where('relid', $params['packageid']) // Assuming custom fields are related to the product
+        ->where('fieldname', 'Hetzner Server ID')
+        ->value('id');
+
+    if (!$fieldId) {
+        $error = 'Custom field "Hetzner Server ID" not found for product ID: ' . $params['packageid'] . '. Cannot terminate.';
+        logModuleCall('hetznercloud', 'TerminateAccount', $params, 'Error: ' . $error);
+        return $error;
+    }
+
+    // Retrieve the Hetzner Server ID from tblcustomfieldsvalues
+    $serverID = Capsule::table('tblcustomfieldsvalues')
+        ->where('fieldid', $fieldId)
+        ->where('relid', $serviceID)
+        ->value('value');
+
+    if (empty($serverID)) {
+        $error = 'Hetzner Server ID not found for service ID: ' . $serviceID . ' in custom fields. Cannot terminate.';
+        logModuleCall('hetznercloud', 'TerminateAccount', $params, 'Error: ' . $error);
+        return $error;
+    }
 
     try {
         $command = "/servers/" . $serverID;
         $response = hetznercloud_api_request($apiKey, $command, 'DELETE');
-        $httpCode = curl_getinfo(null, CURLINFO_HTTP_CODE);
+        $httpCode = curl_getinfo($GLOBALS['ch'], CURLINFO_HTTP_CODE); // Get HTTP status code
+        $data = json_decode($response, true);
 
-        if ($httpCode === 204) {
-            logModuleCall('hetznercloud', 'TerminateAccount', $params, 'Success - Server ID: ' . $serverID);
+        logModuleCall('hetznercloud', 'TerminateAccount', $params, 'HTTP Code: ' . $httpCode . ' - Response: ' . $response);
+
+        if ($httpCode === 204) { // Successful deletion returns 204 No Content
             return 'success';
         } else {
-            $error = 'Failed to terminate server (HTTP ' . $httpCode . '): ' . $response;
-            logModuleCall('hetznercloud', 'TerminateAccount', $params, 'Error: ' . $error);
+            $error = 'Failed to terminate server: ' . (isset($data['error']['message']) ? $data['error']['message'] : $response);
             return $error;
         }
     } catch (\Exception $e) {
