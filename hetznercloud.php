@@ -1,8 +1,13 @@
 <?php
 
+require_once '/var/www/console/includes/functions.php';
+
 if (!defined("WHMCS")) {
     die("This file cannot be accessed directly");
 }
+
+require_once '/var/www/console/init.php';
+
 // 1) Load WHMCS core (adjust path if your layout differs)
 
 use WHMCS\Database\Capsule;
