@@ -3,6 +3,7 @@
 if (!defined("WHMCS")) {
     die("This file cannot be accessed directly");
 }
+// 1) Load WHMCS core (adjust path if your layout differs)
 
 use WHMCS\Database\Capsule;
 
@@ -39,45 +40,20 @@ function hetznercloud_MetaData()
  */
 function hetznercloud_ConfigOptions()
 {
-    $configarray = [
-        "api_key" => [
-            "Type" => "text",
-            "FriendlyName" => "Hetzner API Key",
-            "Description" => "Enter your Hetzner API Key",
+    return [
+        'api_key' => [
+            'Type' => 'text',
+            'FriendlyName' => 'Hetzner API Key',
+            'Description' => 'Enter your Hetzner API Key',
         ],
-        "location_group" => [
-            "Type" => "text",
-            "FriendlyName" => "Location Group (Optional)",
-            "Description" => "Optional location group to filter available locations",
+        'server_type' => [
+            'Type' => 'dropdown',
+            'FriendlyName' => 'Server Type',
+            'Description' => 'Select the server type',
+            'Options' => 'cx22|CX22,cx32|CX32,cx42|CX42,cx52|CX52,cpx11|CPX11,cpx21|CPX21,cpx31|CPX31,cpx41|CPX41,cpx51|CPX51', // Added static server types
         ],
-        "server_type_group" => [
-            "Type" => "text",
-            "FriendlyName" => "Server Type Group (Optional)",
-            "Description" => "Optional server type group to filter available server types",
-        ],
-        "os_templates" => [
-            "Type" => "dropdown",
-            "FriendlyName" => "Operating System",
-            "Description" => "Select the default operating system for new servers",
-            "Options" => hetznercloud_get_os_templates_for_config(), // Modified function call
-        ],
-        "server_types" => [
-            "Type" => "dropdown",
-            "FriendlyName" => "Server Type",
-            "Description" => "Select the default server type for new servers",
-            "Options" => hetznercloud_get_server_types_for_config(), // Modified function call
-        ],
-        "locations" => [
-            "Type" => "dropdown",
-            "FriendlyName" => "Location",
-            "Description" => "Select the default location for new servers",
-            "Options" => hetznercloud_get_locations_for_config(), // Modified function call
-        ],
-        // You can add more configuration options as needed
     ];
-    return $configarray;
 }
-
 /**
  * Hetzner Cloud API Request Helper Function
  *
@@ -121,6 +97,7 @@ function hetznercloud_api_request($apiKey, $command, $method = 'GET', $postfield
     return $response;
 }
 
+
 /**
  * Hetzner Cloud Get OS Templates
  *
@@ -131,19 +108,22 @@ function hetznercloud_api_request($apiKey, $command, $method = 'GET', $postfield
 function hetznercloud_get_os_templates_for_config()
 {
     $apiKey = get_module_setting('api_key', 'hetznercloud');
+    logModuleCall('hetznercloud', 'get_os_templates_config - API Key', ['API Key' => $apiKey], ''); // Log API Key
     $templates = [];
     try {
         $response = hetznercloud_api_request($apiKey, '/images');
+        logModuleCall('hetznercloud', 'get_os_templates_config - API Response', [], $response); // Log API Response
         $data = json_decode($response, true);
+        logModuleCall('hetznercloud', 'get_os_templates_config - Decoded Data', [], print_r($data, true)); // Log Decoded Data
         if (isset($data['images']) && is_array($data['images'])) {
             foreach ($data['images'] as $image) {
-                $templates[$image['id']] = $image['description'] . ' (' . $image['os_flavor'] . ' ' . $image['os_version'] . ')';
+                $templates[] = $image['id'] . '|' . $image['description'] . ' (' . $image['os_flavor'] . ' ' . $image['os_version'] . ')';
             }
         }
     } catch (\Exception $e) {
-        logModuleCall('hetznercloud', 'get_os_templates_config', [], 'Error: ' . $e->getMessage());
+        logModuleCall('hetznercloud', 'get_os_templates_config - Error', [], 'Error: ' . $e->getMessage());
     }
-    return $templates;
+    return implode(',', $templates);
 }
 
 /**
@@ -157,6 +137,7 @@ function hetznercloud_get_server_types_for_config()
 {
     $apiKey = get_module_setting('api_key', 'hetznercloud');
     $group = get_module_setting('server_type_group', 'hetznercloud');
+    logModuleCall('hetznercloud', 'get_server_types_config - API Key & Group', ['API Key' => $apiKey, 'Group' => $group], ''); // Log API Key and Group
     $serverTypes = [];
     $command = '/server_types';
     if (!empty($group)) {
@@ -164,16 +145,18 @@ function hetznercloud_get_server_types_for_config()
     }
     try {
         $response = hetznercloud_api_request($apiKey, $command);
+        logModuleCall('hetznercloud', 'get_server_types_config - API Response', [], $response); // Log API Response
         $data = json_decode($response, true);
+        logModuleCall('hetznercloud', 'get_server_types_config - Decoded Data', [], print_r($data, true)); // Log Decoded Data
         if (isset($data['server_types']) && is_array($data['server_types'])) {
             foreach ($data['server_types'] as $type) {
-                $serverTypes[$type['id']] = $type['name'] . ' (CPU: ' . $type['cores'] . ' Cores, RAM: ' . $type['memory'] . ' GB)';
+                $serverTypes[] = $type['id'] . '|' . $type['name'] . ' (CPU: ' . $type['cores'] . ' Cores, RAM: ' . $type['memory'] . ' GB)';
             }
         }
     } catch (\Exception $e) {
-        logModuleCall('hetznercloud', 'get_server_types_config', ['group' => $group], 'Error: ' . $e->getMessage());
+        logModuleCall('hetznercloud', 'get_server_types_config - Error', [], 'Error: ' . $e->getMessage());
     }
-    return $serverTypes;
+    return implode(',', $serverTypes);
 }
 
 /**
@@ -187,6 +170,7 @@ function hetznercloud_get_locations_for_config()
 {
     $apiKey = get_module_setting('api_key', 'hetznercloud');
     $group = get_module_setting('location_group', 'hetznercloud');
+    logModuleCall('hetznercloud', 'get_locations_for_config - API Key & Group', ['API Key' => $apiKey, 'Group' => $group], ''); // Log API Key and Group
     $locations = [];
     $command = '/locations';
     if (!empty($group)) {
@@ -194,16 +178,18 @@ function hetznercloud_get_locations_for_config()
     }
     try {
         $response = hetznercloud_api_request($apiKey, $command);
+        logModuleCall('hetznercloud', 'get_locations_for_config - API Response', [], $response); // Log API Response
         $data = json_decode($response, true);
+        logModuleCall('hetznercloud', 'get_locations_for_config - Decoded Data', [], print_r($data, true)); // Log Decoded Data
         if (isset($data['locations']) && is_array($data['locations'])) {
             foreach ($data['locations'] as $location) {
-                $locations[$location['name']] = $location['name'] . ' (' . $location['description'] . ')';
+                $locations[] = $location['name'] . '|' . $location['name'] . ' (' . $location['description'] . ')';
             }
         }
     } catch (\Exception $e) {
-        logModuleCall('hetznercloud', 'get_locations_config', ['group' => $group], 'Error: ' . $e->getMessage());
+        logModuleCall('hetznercloud', 'get_locations_for_config - Error', [], 'Error: ' . $e->getMessage());
     }
-    return $locations;
+    return implode(',', $locations);
 }
 
 // That's the first part. Are you ready for the next chunk?
@@ -221,9 +207,9 @@ function hetznercloud_CreateAccount(array $params)
 {
     $apiKey = $params['configoption1'];
     $serverName = $params['domain'];
-    $osTemplate = $params['configoption3']; // Operating System
     $serverType = $params['configoption2']; // Server Type
-    $location = $params['configoption4'];   // Location
+    $osTemplate = $params['customfields']['Operating System'];  // From custom field
+    $location = $params['customfields']['Location'];        // From custom field
 
     try {
         $command = "/servers";
@@ -239,7 +225,19 @@ function hetznercloud_CreateAccount(array $params)
 
         if (isset($data['server']['id'])) {
             $serverID = $data['server']['id'];
-            update_service(['serviceid' => $params['serviceid'], 'customfields' => ['Hetzner Server ID' => $serverID]]);
+            $ipv4 = $data['server']['public_net']['ipv4']['ip'];
+            $rescuePassword = isset($data['server']['root_password']) ? $data['server']['root_password'] : ''; //check if root_password exists
+
+            // Update custom fields
+            update_service([
+                'serviceid' => $params['serviceid'],
+                'customfields' => [
+                    'Hetzner Server ID' => $serverID,
+                    'Hetzner IPv4' => $ipv4,
+                    'Rescue Password' => $rescuePassword,
+                ],
+            ]);
+
             logModuleCall('hetznercloud', 'CreateAccount', $params, 'Success - Server ID: ' . $serverID . ' - Response: ' . $response);
             return 'success';
         } else {
